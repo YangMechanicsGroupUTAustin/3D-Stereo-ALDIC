@@ -1,5 +1,5 @@
 %% ===================================================================
-% 3D Stereo Adaptive Quadtree Digital Image Correlation (3D-STAQ-DIC)
+% 3D Stereo Adaptive Mesh Augmented Lagrangian Digital Image Correlation (3D-Stereo-ALDIC)
 % ===================================================================
 %
 % DESCRIPTION:
@@ -55,17 +55,16 @@ addpath("./examples","./func",'./func_quadtree/rbfinterp/','./plotFiles/','./fun
 fprintf('------------ Section 1 Done ------------ \n \n')
 
 %% Section 2: Load DIC parameters and set up DIC parameters
-%--------   Notes --------------
+%-------- Notes ----------------
 % Strategy 1 needs Left and Right masks
-% Strategy 2 needs Left masks only
-% Inc mode needs all updated masks
-% Acc mode needs only first mask
+% Strategy 2 needs Left masks only (not provided here)
+% Incremental mode needs all updated masks
+% Accumulative mode needs only first mask
 %-------------------------------
 fprintf('------------ Section 2 Start ------------ \n')
 % ====== Read images and masks ======
 % Load DIC raw images
 [fileNameLeft, fileNameRight, imageLeft,imageRight, LoadImgMethod] = ReadImage3DStereo_STAQ;
-
 DICpara = setDICParas_IncOrNot(size(fileNameRight,2));
 
 % Load DIC masks
@@ -113,6 +112,11 @@ end
 
 DICpara.ImgRefMask = double(maskLeft{1});
 
+
+% DICpara.ImgRefMask_left = double(maskLeft{1});
+% DICpara.ImgRefMask_right = double(maskRight{1});
+
+
 fprintf('------------ Section 2 Done ------------ \n \n')
 
 %% Section 3.1 Stereo Calibration
@@ -157,6 +161,10 @@ stereoMatchShapeOrder = 1; % Currently, we only support 1st shape function
 [StereoInfo, RD_L, RD_R] = StereoMatch_STAQ(RD_L,RD_R,imgNormalized_L{1},imgNormalized_R{1},...
     fileNameLeft,maskLeft{1},maskRight{1} ,DICpara,StereoInfo,stereoMatchShapeOrder);
 
+% debug
+% figure; imshow(maskLeft{1});
+% figure; imshow(maskRight{1});
+
 %%%%%%%%%%%%%%%%%%%%% Test 3D construction: START %%%%%%%%%%%%%%%%%%%%%
 RD0_L_Pts = StereoInfo.ResultFEMeshEachFrame.coordinatesFEM;
 RD0_R_Pts = StereoInfo.ResultFEMesh_corr;
@@ -196,11 +204,11 @@ disp(['mean_repo = ',num2str(mean(reprojectionErrors{1}))]);
 
 %% Section 4 Temporal Matching
 % Left image series
-    shapeFuncOrder = 1; % Curre1ntly, we only support 1st shape function
-    RD_L = TemporalMatch_quadtree_ST1(DICpara, fileNameLeft,maskLeft,imgNormalized_L,RD_L,StereoInfo, 'camera0',shapeFuncOrder);
+shapeFuncOrder = 1; % Curre1ntly, we only support 1st shape function
+RD_L = TemporalMatch_quadtree_ST1(DICpara, fileNameLeft,maskLeft,imgNormalized_L,RD_L,StereoInfo, 'camera0',shapeFuncOrder);
 
 %% Right image series
-shapeFuncOrder = 1; % Curre1ntly, we only support 1st shape function
+shapeFuncOalized_rder = 1; % Curre1ntly, we only support 1st shape function
 RD_R = TemporalMatch_quadtree_ST1(DICpara,fileNameRight,maskRight,imgNormalized_R,RD_R,StereoInfo, 'notCamera0',shapeFuncOrder);
 
 %% Section 5 3D-Result
@@ -210,14 +218,14 @@ matchedPairs = organizeMatchedPairds_quadtree_ST1(RD_L,RD_R,DICpara);
 [FinalResult,reprojectionErrors] = stereoReconstruction_quadtree(matchedPairs,StereoInfo.cameraParams);
                                                                                       
 % Optional:Check the 3D reconstruction results
-check3DReconstructionResults(reprojectionErrors, FinalResult, RD_L, 2);
+check3DReconstructionResults(reprojectionErrors, FinalResult, RD_L,13);
 
 %% Section 6: Compute strains/ Plot disp. and strains
 close all;
 fprintf('------------ Section 8 Start ------------ \n')
 % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % This section is to compute strain fields and plot disp and strain results
-% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% %%%%%%%%%%%%%%%%%%%%5%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % ------ Convert units from pixels to the physical world ------
 % DICpara.um2px = funParaInput('ConvertUnit');
 DICpara.um2px = 1;
@@ -247,20 +255,19 @@ DICpara.MethodToSaveFig = funParaInput('SaveFigFormat');
 DICpara.OrigDICImgTransparency = 1;
 if DICpara.MethodToSaveFig == 1
     % DICpara.OrigDICImgTransparency = funParaInput('OrigDICImgTransparency');
-    DICpara.OrigDICImgTransparency = 0.5;
+    DICpara.OrigDICImgTransparency = 0.8;
 end
 
 %--------- Transform the disp. to other coor. sys.?---------
 RotationMatrix = [1 0 0; 0 1 0; 0 0 1]; TranslationMatrix = [0 0 0];
-if isempty(DICpara.transformDisp) || DICpara.transformDisp == 1
-    DICpara.transformDisp = funParaInput('TransformDispOrNot');
-    if DICpara.transformDisp == 0
-        Base_Points2D = getBasePoints(imageLeft{1,1});
-        [RotationMatrix,TranslationMatrix] = GetRTMatrix( RD_L.ResultFEMeshEachFrame{1,1}.coordinatesFEM, Base_Points2D, FinalResult.Coordinates(1,:));
-        DICpara.RforStrainCal = RotationMatrix;
-        close all;
-    end
+DICpara.transformDisp = funParaInput('TransformDispOrNot');
+if DICpara.transformDisp == 1
+    Base_Points2D = getBasePoints(imageLeft{1,1}',maskLeft{1,1}');
+    [RotationMatrix,TranslationMatrix] = GetRTMatrix( RD_L.ResultFEMeshEachFrame{1,1}.coordinatesFEM, Base_Points2D, FinalResult.Coordinates(1,:));
+    DICpara.RforStrainCal = RotationMatrix;
+    close all;
 end
+
 
 % ------ Start main part ------
 prompt = 'What is your strain size? e.g. 3,5,7...\nInput: ';
@@ -318,12 +325,33 @@ for ImgSeqNum = 2: length(imgNormalized_L)
     % close all; Plotdisp_show_3D(FinalResult.Displacement(ImgSeqNum,:),RD_L.ResultFEMeshEachFrame{1,1}.coordinatesFEM,...
     %     RD_L.ResultFEMeshEachFrame{1,1}.elementsFEM,DICpara,'NoEdgeColor');
 
+
+    % ---------------------------------------------------------
+    % Plotting Configuration - Easy Mode Switching
+    % ---------------------------------------------------------
+
+    % Define what to plot
+    DICpara.plots_disp_to_generate = {'u', 'v', 'w', 'magnitude'};
+    DICpara.plots_strain_to_generate = {'exx', 'eyy', 'exy'};
+    % === QUICK MODE SELECTION ===
+    % Choose one of: 'auto', 'custom', 'interactive'
+    plotting_mode = 'interactive';  % Change this line to switch modes instantly
+
+    DICpara = setPlottingParameters(DICpara, plotting_mode);
+
+    % -----------------------------------------------------
+
     % % ----- Plot disp and strain ------
     if DICpara.DICIncOrNot == 0
         % Displacement
         if DICpara.transformDisp == 0
             PlotdispQuadtreeMasks3D_acc_ST1(FinalResult.DisplacementNew(ImgSeqNum,:),RD_L.ResultDisp{ImgSeqNum-1,1}.U,...
                 RD_L.ResultFEMeshEachFrame{1,1}, FullImageName_first,FullImageName_current,DICpara,voidIndex);
+            
+            % Zach Optional：
+            % PlotWarpage(FinalResult.warpage(ImgSeqNum,:),RD_L.ResultDisp{ImgSeqNum-1,1}.U,...
+            %     RD_L.ResultFEMeshEachFrame{1,1}, FullImageName_first,FullImageName_current,DICpara,voidIndex);
+   
         else
             PlotdispQuadtreeMasks3D_acc_ST1(FinalResult.Displacement(ImgSeqNum,:),RD_L.ResultDisp{ImgSeqNum-1,1}.U,...
                 RD_L.ResultFEMeshEachFrame{1,1}, FullImageName_first,FullImageName_current,DICpara,voidIndex);
@@ -349,14 +377,13 @@ for ImgSeqNum = 2: length(imgNormalized_L)
     end
 
     % ----- Save strain results ------
-    % FinalResult.ResultStrainWorld{ImgSeqNum,1}= struct('strain_exx',strain_exx,...
-    %     'strain_eyy',strain_eyy,'strain_exy',strain_exy);
-    % 'strain_principal_max',strain_principal_max,'strain_principal_min',strain_principal_min, ...
-    %     'strain_maxshear',strain_maxshear,'strain_vonMises',strain_vonMises
+    FinalResult.ResultStrainWorld{ImgSeqNum,1}= struct('strain_exx',strain_exx,...
+        'strain_eyy',strain_eyy,'strain_exy',strain_exy,'strain_principal_max',strain_principal_max,'strain_principal_min',strain_principal_min, ...
+        'strain_maxshear',strain_maxshear,'strain_vonMises',strain_vonMises);
     clear strain_exx  strain_eyy  strain_ezz  strain_exy  strain_eyz  strain_exz strain_maxshear strain_principal_max strain_principal_min strain_vonMises
+   
     % ------ Save figures for tracked displacement and strain fields ------
-    % SaveFigFilesDispAndStrain;
-
+    SaveFigFilesDispAndStrain(DICpara, fileNameLeft, ImgSeqNum,'FileFormat',DICpara.MethodToSaveFig);
     close all;
 
 end

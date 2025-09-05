@@ -1,121 +1,202 @@
-% Save figures or output images for solved displacement and strain fields
+function SaveFigFilesDispAndStrain(DICpara, fileNameLeft, ImgSeqNum, varargin)
+%SAVEFIGFILESDISPANDSTRAIN Save displacement and strain figures to various file formats
+%
+% USAGE:
+%   SaveFigFilesDispAndStrain(DICpara, fileNameLeft, ImgSeqNum)
+%   SaveFigFilesDispAndStrain(DICpara, fileNameLeft, ImgSeqNum, 'FileFormat', 'jpg')
+%   SaveFigFilesDispAndStrain(DICpara, fileNameLeft, ImgSeqNum, 'Resolution', 600)
+%   SaveFigFilesDispAndStrain(DICpara, fileNameLeft, ImgSeqNum, 'FigureList', [1,2,3])
+%
+% INPUTS:
+%   DICpara     - DIC parameters structure
+%   fileNameLeft- Left camera file names cell array
+%   ImgSeqNum   - Current image sequence number
+%
+% OPTIONAL PARAMETERS:
+%   'FileFormat'  - Output file format: 'jpg'(default), 'png', 'pdf', 'eps', 'fig', 'tiff'
+%   'Resolution'  - Output resolution in DPI (default: 300)
+%   'FigureList'  - List of figure numbers to save (default: all open figures)
+%   'OutputPath'  - Custom output path (default: uses DICpara.outputFilePath or prompts user)
+%   'Prefix'      - Custom filename prefix (default: uses image name)
+%   'CreateSubfolders' - Create subfolders for each variable (default: true)
+%
+% AUTHOR: Modified for 3D-Stereo-ALDIC by Zach Tong
 
-%%
-% Find img name
-[~,imgname,imgext] = fileparts([fileNameLeft{2,ImgSeqNum},'\',fileNameLeft{1,ImgSeqNum}]);
-%%
-if isempty(DICpara.outputFilePath)
-    DICpara.outputFilePath = uigetdir;
-    outputVariables = {'DispU','DispV','DispW','DispA','exx','exy','eyy','dwdx','dwdy'};
+%% Parse input arguments
+p = inputParser;
+addRequired(p, 'DICpara', @isstruct);
+addRequired(p, 'fileNameLeft', @iscell);
+addRequired(p, 'ImgSeqNum', @isnumeric);
+addParameter(p, 'FileFormat', 'jpg', @(x) ismember(lower(x), {'jpg', 'jpeg', 'png', 'pdf', 'eps', 'fig', 'tiff', 'tif'}));
+addParameter(p, 'Resolution', 300, @isnumeric);
+addParameter(p, 'FigureList', [], @isnumeric);
+addParameter(p, 'OutputPath', '', @ischar);
+addParameter(p, 'Prefix', '', @ischar);
+addParameter(p, 'CreateSubfolders', true, @islogical);
+
+parse(p, DICpara, fileNameLeft, ImgSeqNum, varargin{:});
+
+fileFormat = lower(p.Results.FileFormat);
+resolution = p.Results.Resolution;
+figureList = p.Results.FigureList;
+outputPath = p.Results.OutputPath;
+prefix = p.Results.Prefix;
+createSubfolders = p.Results.CreateSubfolders;
+
+%% Generate image name and prefix
+try
+    [~, imgname, ~] = fileparts([fileNameLeft{2,ImgSeqNum}, '\', fileNameLeft{1,ImgSeqNum}]);
+catch
+    try
+        [~, imgname, ~] = fileparts(fileNameLeft{1,ImgSeqNum});
+    catch
+        imgname = sprintf('Image_%04d', ImgSeqNum);
+    end
+end
+
+if isempty(prefix)
+    prefix = imgname;
+end
+
+%% Set up output path and folders
+if isempty(outputPath)
+    if isfield(DICpara, 'outputFilePath') && ~isempty(DICpara.outputFilePath)
+        outputPath = DICpara.outputFilePath;
+    else
+        outputPath = uigetdir(pwd, 'Select output directory for figures');
+        if outputPath == 0
+            fprintf('Save operation cancelled by user.\n');
+            return;
+        end
+        DICpara.outputFilePath = outputPath;
+    end
+end
+
+% Define output variables and their corresponding folder names
+outputVariables = {'DispU', 'DispV', 'DispW', 'DispMag', ...
+                   'exx', 'exy', 'eyy', 'eyz', 'exz', 'ezz', ...
+                   'dwdx', 'dwdy', 'principal_max', 'principal_min', ...
+                   'max_shear', 'vonMises', 'AllFigures'};
+
+% Create subfolders if requested
+if createSubfolders
     for i = 1:length(outputVariables)
-        tempfolder_path = [DICpara.outputFilePath,'\',outputVariables{i}];
-        if ~exist(tempfolder_path, 'dir')  
-            mkdir(tempfolder_path);  
+        tempfolder_path = fullfile(outputPath, outputVariables{i});
+        if ~exist(tempfolder_path, 'dir')
+            mkdir(tempfolder_path);
         end
     end
 end
 
-if DICpara.MethodToSaveFig == 1
-    %% jpg
-    figure(1); if DICpara.OrigDICImgTransparency == 0, colormap jet; clim auto; end
-    print([DICpara.outputFilePath,'\DispU\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_DispU'],'-djpeg','-r300');
+%% Get list of figures to save
+if isempty(figureList)
+    figureList = findobj('Type', 'figure');
+    figureList = [figureList.Number];
+end
 
-    figure(2); if DICpara.OrigDICImgTransparency == 0, colormap jet; clim auto; end
-    print([DICpara.outputFilePath,'\DispV\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_DispV'],'-djpeg','-r300');
+if isempty(figureList)
+    fprintf('No figures found to save.\n');
+    return;
+end
 
-    figure(3); if DICpara.OrigDICImgTransparency == 0, colormap jet; clim([-0.025,0.025]); end
-    print([DICpara.outputFilePath,'\DispW\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_DispW'],'-djpeg','-r300')
+%% Set format-specific parameters
+switch fileFormat
+    case {'jpg', 'jpeg'}
+        formatFlag = '-djpeg';
+        fileExt = '.jpg';
+    case 'png'
+        formatFlag = '-dpng';
+        fileExt = '.png';
+    case 'pdf'
+        formatFlag = '-dpdf';
+        fileExt = '.pdf';
+    case 'eps'
+        formatFlag = '-depsc';
+        fileExt = '.eps';
+    case {'tiff', 'tif'}
+        formatFlag = '-dtiff';
+        fileExt = '.tif';
+    case 'fig'
+        formatFlag = '';
+        fileExt = '.fig';
+    otherwise
+        error('Unsupported file format: %s', fileFormat);
+end
 
-    % % figure(4); if DICpara.OrigDICImgTransparency == 0, colormap jet; clim([-0.025,0.025]); end
-    % % print([DICpara.outputFilePath,'\DispA\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_DispA'],'-djpeg','-r300')
+%% Save figures
+fprintf('Saving figures in %s format...\n', upper(fileFormat));
 
-    figure(4); if DICpara.OrigDICImgTransparency == 0, colormap jet; clim([-0.015,0.015]); end
-    print([DICpara.outputFilePath,'\exx\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_exx'],'-djpeg','-r300')
+% Define figure-to-variable mapping
+figureMapping = containers.Map('KeyType', 'int32', 'ValueType', 'char');
+figureMapping(1) = 'DispU';
+figureMapping(2) = 'DispV';
+figureMapping(3) = 'DispW';
+figureMapping(4) = 'DispMag';
+figureMapping(5) = 'exx';
+figureMapping(6) = 'exy';
+figureMapping(7) = 'eyy';
+figureMapping(8) = 'eyz';
+figureMapping(9) = 'exz';
+figureMapping(10) = 'ezz';
+figureMapping(11) = 'dwdx';
+figureMapping(12) = 'dwdy';
+figureMapping(13) = 'principal_max';
+figureMapping(14) = 'principal_min';
+figureMapping(15) = 'max_shear';
+figureMapping(16) = 'vonMises';
 
-    figure(5); if DICpara.OrigDICImgTransparency == 0, colormap jet;  clim([0,0.025]); end
-    print([DICpara.outputFilePath,'\exy\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_exy'],'-djpeg','-r300')
+for figNum = figureList
+    try
+        figure(figNum);
+        
+        % Generate filename components
+        if isfield(DICpara, 'winsize') && isfield(DICpara, 'winstepsize')
+            paramStr = sprintf('_WS%d_ST%d', DICpara.winsize, DICpara.winstepsize);
+        else
+            paramStr = '';
+        end
+        
+        % Determine variable name and subfolder
+        if figureMapping.isKey(figNum)
+            varName = figureMapping(figNum);
+        else
+            varName = sprintf('Figure_%d', figNum);
+        end
+        
+        % Generate full filename
+        if createSubfolders
+            if ismember(varName, outputVariables)
+                fullPath = fullfile(outputPath, varName, [prefix, paramStr, '_', varName, fileExt]);
+            else
+                fullPath = fullfile(outputPath, 'AllFigures', [prefix, paramStr, '_', varName, fileExt]);
+            end
+        else
+            fullPath = fullfile(outputPath, [prefix, paramStr, '_', varName, fileExt]);
+        end
+        
+        % Apply colormap and axis settings if needed
+        if isfield(DICpara, 'OrigDICImgTransparency') && DICpara.OrigDICImgTransparency == 0
+            colormap('turbo'); % Use modern colormap
+            clim('auto');
+        end
+        
+        % Save the figure
+        if strcmp(fileFormat, 'fig')
+            savefig(fullPath);
+        else
+            resolutionStr = sprintf('-r%d', resolution);
+            print(fullPath, formatFlag, resolutionStr);
+        end
+        
+        fprintf('Saved: %s\n', fullPath);
+        
+    catch ME
+        fprintf('Error saving figure %d: %s\n', figNum, ME.message);
+    end
+end
 
-    figure(6); if DICpara.OrigDICImgTransparency == 0, colormap jet;  clim([-0.025,0]); end
-    print([DICpara.outputFilePath,'\eyy\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_eyy'],'-djpeg','-r300')
+fprintf('Figure saving completed. Files saved to: %s\n', outputPath);
 
-    % figure(7); if DICpara.OrigDICImgTransparency == 0, colormap jet;  clim([-0.025,0]); end
-    % print([DICpara.outputFilePath,'\DispU\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_eyy_2'],'-djpeg','-r300')
-    % 
-    % 
-    % % figure(8); if DICpara.OrigDICImgTransparency == 0, colormap jet;  clim([0,0.07]); end
-    % % print([DICpara.outputFilePath,'\DispU\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_maxprincipal'],'-djpeg','-r300')
-    % % 
-    % % figure(9); if DICpara.OrigDICImgTransparency == 0, colormap jet;  clim([0,0.07]); end
-    % % print([DICpara.outputFilePath,'\DispU\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_vonMises'],'-djpeg','-r300')
-    % % 
-    figure(7); if DICpara.OrigDICImgTransparency == 0, colormap jet;  clim([0,0.07]); end
-    print([DICpara.outputFilePath,'\dwdx\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_dwdx'],'-djpeg','-r300')
-
-    figure(8); if DICpara.OrigDICImgTransparency == 0, colormap jet;  clim([0,0.07]); end
-    print([DICpara.outputFilePath,'\dwdy\',imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_dwdy'],'-djpeg','-r300')
-
-elseif DICpara.MethodToSaveFig == 2
-    %% pdf
-    filename = [imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_DispU'];
-    figure(3); if DICpara.OrigDICImgTransparency == 0, colormap jet; clim auto; end
-    export_fig( gcf , '-pdf' , '-r300' , '-painters' , filename);
-    
-    filename = [imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_DispV'];
-    figure(4); if DICpara.OrigDICImgTransparency == 0, colormap jet; clim auto; end
-    export_fig( gcf , '-pdf' , '-r300' , '-painters' , filename);
-    
-    filename = [imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_exx'];
-    figure(5); if DICpara.OrigDICImgTransparency == 0, colormap coolwarm(32); clim([-0.025,0.025]); end
-    export_fig( gcf , '-pdf' , '-r300' , '-painters' , filename);
-    
-    filename = [imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_exy'];
-    figure(6); if DICpara.OrigDICImgTransparency == 0, colormap coolwarm(32); clim([-0.025,0.025]); end
-    export_fig( gcf , '-pdf' , '-r300' , '-painters' , filename);
-    
-    filename = [imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_eyy'];
-    figure(7); if DICpara.OrigDICImgTransparency == 0, colormap coolwarm(32); clim([-0.015,0.015]); end
-    export_fig( gcf , '-pdf' , '-r300' , '-painters' , filename);
-    
-    filename = [imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_principal_max'];
-    figure(8); if DICpara.OrigDICImgTransparency == 0, colormap coolwarm(32); clim([0,0.025]); end
-    export_fig( gcf , '-pdf' , '-r300' , '-painters' , filename);
-    
-    filename = [imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_principal_min'];
-    figure(9); if DICpara.OrigDICImgTransparency == 0, colormap coolwarm(32); clim([-0.025,0]); end
-    export_fig( gcf , '-pdf' , '-r300' , '-painters' , filename);
-    
-    filename = [imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_maxshear'];
-    figure(10); if DICpara.OrigDICImgTransparency == 0, colormap coolwarm(32); clim([0,0.07]); end
-    export_fig( gcf , '-pdf' , '-r300' , '-painters' , filename);
-    
-    filename = [imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_vonMises'];
-    figure(11); if DICpara.OrigDICImgTransparency == 0, colormap coolwarm(32); clim([0,0.07]); end
-    export_fig( gcf , '-pdf' , '-r300' , '-painters' , filename);
-    
-    
-else
-    %% fig
-    fprintf('Please modify codes manually in Section 8.');
-    figure(3); colormap(coolwarm(128)); clim auto; 
-        savefig([imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_DispU.fig']);
-    figure(4); colormap(coolwarm(128)); clim auto; 
-        savefig([imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_DispV.fig']);
-    figure(5); colormap(coolwarm(128)); clim([-0.05,0.1]); 
-        savefig([imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_exx.fig']);
-    figure(6); colormap(coolwarm(128)); clim([-0.05,0.05]); 
-        savefig([imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_exy.fig']);
-    figure(7); colormap(coolwarm(128)); clim([-0.1,0.05]); 
-        savefig([imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_eyy.fig']);
-    figure(8); colormap(coolwarm(128)); clim([0,0.025]); 
-        savefig([imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_principal_max.fig']);
-    figure(9); colormap(coolwarm(128)); clim([-0.025,0]); 
-        savefig([imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_principal_min.fig']);
-    figure(10); colormap(coolwarm(128)); clim([0,0.07]); 
-        savefig([imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_maxshear.fig']);
-    figure(11); colormap(coolwarm(128)); clim([0,0.07]); 
-        savefig([imgname,'_WS',num2str(DICpara.winsize),'_ST',num2str(DICpara.winstepsize),'_strain_vonMises.fig']);
-    
-    
 end
 
 
